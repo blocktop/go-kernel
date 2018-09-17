@@ -21,7 +21,7 @@ import (
 
 	"github.com/golang/glog"
 
-	spec "github.com/blckit/go-spec"
+	spec "github.com/blocktop/go-spec"
 )
 
 type Controller struct {
