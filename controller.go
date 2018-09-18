@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with blocktop. If not, see <http://www.gnu.org/licenses/>.
 
-package blockchain
+package controller
 
 import (
 	"context"
@@ -41,8 +41,8 @@ func NewController(networkNode spec.NetworkNode) *Controller {
 	c.Blockchains = make(map[string]spec.Blockchain)
 	c.TransactionHandlers = make(map[string]spec.TransactionHandler)
 	c.startedBlockchains = make(map[string]bool, 0)
-	c.stopProc = make([]chan bool, 4)
-	for i := 0; i < 4; i++ {
+	c.stopProc = make([]chan bool, 3)
+	for i := 0; i < 3; i++ {
 		c.stopProc[i] = make(chan bool, 1)
 	}
 
@@ -87,7 +87,6 @@ func (c *Controller) StartBlockchain(ctx context.Context, name string) {
 	c.startedBlockchains[name] = true
 
 	go c.confirmBlocks(ctx, name)
-	go c.confirmLocalBlocks(ctx, name)
 	go c.broadcastBlocks(ctx, name)
 
 	c.Blockchains[name].Start(ctx)
@@ -97,36 +96,24 @@ func (c *Controller) StopBlockchain(name string) {
 	c.startedBlockchains[name] = false
 	c.Blockchains[name].Stop()
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		c.stopProc[i] <- true
 	}
 }
 
 func (c *Controller) confirmBlocks(ctx context.Context, bcType string) {
-	ch := c.Blockchains[bcType].GetConfirmChan()
+	confirm := c.Blockchains[bcType].GetConsensus().GetConfirmChan()
+	local := c.Blockchains[bcType].GetConsensus().GetConfirmLocalChan()
+
 	for {
 		select {
 		case <-c.stopProc[0]:
 		case <-ctx.Done():
 			return
-		case block := <-ch:
+		case block := <-confirm:
 			c.confirmBlock(bcType, block)
-		}
-	}
-}
-
-func (c *Controller) confirmLocalBlocks(ctx context.Context, bcType string) {
-	ch := c.Blockchains[bcType].GetConfirmLocalChan()
-	for {
-		//time.Sleep(100 * time.Millisecond)
-		select {
-		case <-c.stopProc[1]:
-		case <-ctx.Done():
-			return
-		case block := <-ch:
+		case block := <-local:
 			c.confirmBlock(bcType, block)
-			// hooray!
-			// TODO: Log our success and our reward
 			glog.Warningf("Peer %s: %s local block %s confirmed, reward = %d", c.logPeerID, bcType, block.GetID()[:6], 1000000000)
 		}
 	}
@@ -148,6 +135,7 @@ func (c *Controller) broadcastBlocks(ctx context.Context, bcType string) {
 
 func (c *Controller) confirmBlock(bcType string, block spec.Block) {
 	glog.Warningf("Peer %s: %s confirmed block %d: %s", c.logPeerID, bcType, block.GetBlockNumber(), block.GetID()[:6])
+	
 	go c.unlogTransactions(bcType, block)
 	go c.executeTransactions(bcType, block)
 }
@@ -195,7 +183,7 @@ func (c *Controller) receiveMessages(ctx context.Context) {
 	for {
 		//time.Sleep(50 * time.Millisecond)
 		select {
-		case <-c.stopProc[3]:
+		case <-c.stopProc[1]:
 		case <-ctx.Done():
 			return
 		case netMsg := <-ch:
