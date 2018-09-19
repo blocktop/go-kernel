@@ -19,14 +19,11 @@ package controller
 import (
 	"context"
 
-	"github.com/golang/glog"
-
 	spec "github.com/blocktop/go-spec"
 )
 
 type Controller struct {
 	Blockchains         map[string]spec.Blockchain
-	TransactionHandlers map[string]spec.TransactionHandler
 	NetworkNode         spec.NetworkNode
 	PeerID              string
 	logPeerID           string
@@ -39,7 +36,6 @@ func NewController(networkNode spec.NetworkNode) *Controller {
 	c := &Controller{NetworkNode: networkNode, PeerID: networkNode.GetPeerID()}
 	c.logPeerID = c.PeerID[2:8] // remove the "Qm" and take 6 runes
 	c.Blockchains = make(map[string]spec.Blockchain)
-	c.TransactionHandlers = make(map[string]spec.TransactionHandler)
 	c.startedBlockchains = make(map[string]bool, 0)
 	c.stopProc = make([]chan bool, 3)
 	for i := 0; i < 3; i++ {
@@ -56,14 +52,6 @@ func (c *Controller) AddBlockchain(bc spec.Blockchain) {
 	}
 	c.Blockchains[bcType] = bc
 	c.startedBlockchains[bcType] = false
-}
-
-func (c *Controller) AddTransactionHandler(h spec.TransactionHandler) {
-	txnType := h.GetType()
-	if c.TransactionHandlers[txnType] != nil {
-		panic("transaction handler already added")
-	}
-	c.TransactionHandlers[txnType] = h
 }
 
 func (c *Controller) Start(ctx context.Context) {
@@ -86,10 +74,7 @@ func (c *Controller) Stop() {
 func (c *Controller) StartBlockchain(ctx context.Context, name string) {
 	c.startedBlockchains[name] = true
 
-	go c.confirmBlocks(ctx, name)
-	go c.broadcastBlocks(ctx, name)
-
-	c.Blockchains[name].Start(ctx)
+	c.Blockchains[name].Start(ctx, c.NetworkNode.GetBroadcastChan())
 }
 
 func (c *Controller) StopBlockchain(name string) {
@@ -99,83 +84,6 @@ func (c *Controller) StopBlockchain(name string) {
 	for i := 0; i < 3; i++ {
 		c.stopProc[i] <- true
 	}
-}
-
-func (c *Controller) confirmBlocks(ctx context.Context, bcType string) {
-	confirm := c.Blockchains[bcType].GetConsensus().GetConfirmChan()
-	local := c.Blockchains[bcType].GetConsensus().GetConfirmLocalChan()
-
-	for {
-		select {
-		case <-c.stopProc[0]:
-		case <-ctx.Done():
-			return
-		case block := <-confirm:
-			c.confirmBlock(bcType, block)
-		case block := <-local:
-			c.confirmBlock(bcType, block)
-			glog.Warningf("Peer %s: %s local block %s confirmed, reward = %d", c.logPeerID, bcType, block.GetID()[:6], 1000000000)
-		}
-	}
-}
-
-func (c *Controller) broadcastBlocks(ctx context.Context, bcType string) {
-	ch := c.Blockchains[bcType].GetBroadcastChan()
-	for {
-		//time.Sleep(100 * time.Millisecond)
-		select {
-		case <-c.stopProc[2]:
-		case <-ctx.Done():
-			return
-		case broadcast := <-ch:
-			c.broadcastBlock(ctx, bcType, broadcast)
-		}
-	}
-}
-
-func (c *Controller) confirmBlock(bcType string, block spec.Block) {
-	glog.Warningf("Peer %s: %s confirmed block %d: %s", c.logPeerID, bcType, block.GetBlockNumber(), block.GetID()[:6])
-	
-	go c.unlogTransactions(bcType, block)
-	go c.executeTransactions(bcType, block)
-}
-
-func (c *Controller) unlogTransactions(bcType string, block spec.Block) {
-	bc := c.Blockchains[bcType]
-	if bc == nil {
-		// TODO: log something, fail?
-		return
-	}
-	bc.GetBlockGenerator().UnlogTransactions(block.GetTransactions())
-}
-
-func (c *Controller) executeTransactions(bcType string, block spec.Block) {
-	for _, t := range block.GetTransactions() {
-		txnType := t.GetType()
-		handler := c.TransactionHandlers[txnType]
-		if handler == nil {
-			// TODO: log something here
-			// if we can't confirm txn then our data will be corrupt
-			// or no one else will be able to either
-			// or could be security issue
-		} else {
-			handler.Execute(t)
-		}
-	}
-}
-
-func (c *Controller) broadcastBlock(ctx context.Context, bcType string, broadcast *spec.BroadcastBlock) {
-	block := broadcast.Block
-
-	p := &spec.MessageProtocol{}
-	p.SetBlockchainType(bcType)
-	p.SetResourceType(spec.ResourceTypeBlock)
-	p.SetComponentType(block.GetType())
-	p.SetVersion(block.GetVersion())
-
-	message := block.Marshal()
-
-	c.NetworkNode.Broadcast(ctx, message, broadcast.From, p)
 }
 
 func (c *Controller) receiveMessages(ctx context.Context) {
@@ -208,35 +116,9 @@ func (c *Controller) receiveMessage(netMsg *spec.NetworkMessage) {
 
 	switch p.GetResourceType() {
 	case "transaction":
-		go c.receiveTransaction(bc, netMsg)
+		go bc.ReceiveTransaction(netMsg)
 
 	case "block":
-		go c.receiveBlock(bc, netMsg)
+		go bc.ReceiveBlock(netMsg)
 	}
-}
-
-func (c *Controller) receiveTransaction(bc spec.Blockchain, netMsg *spec.NetworkMessage) {
-	p := netMsg.Protocol
-	msg := netMsg.Message
-
-	txnType := p.GetComponentType()
-	h := c.TransactionHandlers[txnType]
-	if h == nil {
-		//TODO
-		return
-	}
-	txn := h.Unmarshal(msg)
-	bc.GetBlockGenerator().LogTransaction(txn)
-}
-
-func (c *Controller) receiveBlock(bc spec.Blockchain, netMsg *spec.NetworkMessage) {
-	msg := netMsg.Message
-	block := bc.GetBlockGenerator().Unmarshal(msg, c.TransactionHandlers)
-	glog.V(1).Infof("Peer %s: %s received block %s", c.logPeerID, bc.GetType(), block.GetID()[:6])
-
-	broadcast := &spec.BroadcastBlock{
-		Block: block,
-		From:  netMsg.From}
-
-	bc.GetReceiveChan() <- broadcast
 }
