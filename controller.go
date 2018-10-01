@@ -19,34 +19,59 @@ package controller
 import (
 	"context"
 
+	push "github.com/blocktop/go-push-components"
 	spec "github.com/blocktop/go-spec"
+	"github.com/fatih/color"
+	"github.com/golang/glog"
+	"github.com/spf13/viper"
 )
 
 type Controller struct {
-	Blockchains         map[string]spec.Blockchain
-	NetworkNode         spec.NetworkNode
-	PeerID              string
-	logPeerID           string
-	startedBlockchains  map[string]bool
-	started             bool
-	stopProc            []chan bool
+	Blockchains        map[string]spec.Blockchain
+	NetworkNode        spec.NetworkNode
+	PeerID             string
+	logPeerID          string
+	startedBlockchains map[string]bool
+	started            bool
+	receiveQ           *push.PushQueue
 }
 
+// compile-time check that interface is satisfied
+var _ spec.Controller = (*Controller)(nil)
+
 func NewController(networkNode spec.NetworkNode) *Controller {
-	c := &Controller{NetworkNode: networkNode, PeerID: networkNode.GetPeerID()}
+	c := &Controller{NetworkNode: networkNode, PeerID: networkNode.PeerID()}
 	c.logPeerID = c.PeerID[2:8] // remove the "Qm" and take 6 runes
 	c.Blockchains = make(map[string]spec.Blockchain)
 	c.startedBlockchains = make(map[string]bool, 0)
-	c.stopProc = make([]chan bool, 3)
-	for i := 0; i < 3; i++ {
-		c.stopProc[i] = make(chan bool, 1)
-	}
+
+	c.setupMessageReceiver()
 
 	return c
 }
 
+func (c *Controller) setupMessageReceiver() {
+	c.NetworkNode.OnMessageReceived(c.networkMessageHandler)
+
+	concurrency := viper.GetInt("blockchain.receiveconcurrency")
+	c.receiveQ = push.NewPushQueue(concurrency, 1000, func(msg push.QueueItem) {
+		netMsg, ok := msg.(*spec.NetworkMessage)
+		if !ok {
+			glog.Warningf("Peer %s: received wrong message type from queue", c.logPeerID)
+			return
+		}
+		c.receiveMessage(netMsg)
+	})
+
+	c.receiveQ.OnOverload(func(item push.QueueItem) {
+		glog.Errorln(color.HiRedString("Peer %s: network receive queue was overloaded", c.logPeerID))
+	})
+
+	c.receiveQ.Start()
+}
+
 func (c *Controller) AddBlockchain(bc spec.Blockchain) {
-	bcType := bc.GetType()
+	bcType := bc.Type()
 	if c.Blockchains[bcType] != nil {
 		panic("blockchain already added")
 	}
@@ -60,7 +85,6 @@ func (c *Controller) Start(ctx context.Context) {
 	for name := range c.Blockchains {
 		c.StartBlockchain(ctx, name)
 	}
-	go c.receiveMessages(ctx)
 }
 
 func (c *Controller) Stop() {
@@ -74,30 +98,16 @@ func (c *Controller) Stop() {
 func (c *Controller) StartBlockchain(ctx context.Context, name string) {
 	c.startedBlockchains[name] = true
 
-	c.Blockchains[name].Start(ctx, c.NetworkNode.GetBroadcastChan())
+	c.Blockchains[name].Start(ctx, c.NetworkNode.Broadcast)
 }
 
 func (c *Controller) StopBlockchain(name string) {
 	c.startedBlockchains[name] = false
 	c.Blockchains[name].Stop()
-
-	for i := 0; i < 3; i++ {
-		c.stopProc[i] <- true
-	}
 }
 
-func (c *Controller) receiveMessages(ctx context.Context) {
-	ch := c.NetworkNode.GetReceiveChan()
-	for {
-		//time.Sleep(50 * time.Millisecond)
-		select {
-		case <-c.stopProc[1]:
-		case <-ctx.Done():
-			return
-		case netMsg := <-ch:
-			c.receiveMessage(netMsg)
-		}
-	}
+func (c *Controller) networkMessageHandler(netMsg *spec.NetworkMessage) {
+	c.receiveQ.Put(netMsg)
 }
 
 func (c *Controller) receiveMessage(netMsg *spec.NetworkMessage) {
@@ -116,9 +126,9 @@ func (c *Controller) receiveMessage(netMsg *spec.NetworkMessage) {
 
 	switch p.GetResourceType() {
 	case "transaction":
-		go bc.ReceiveTransaction(netMsg)
+		bc.ReceiveTransaction(netMsg)
 
 	case "block":
-		go bc.ReceiveBlock(netMsg)
+		bc.ReceiveBlock(netMsg)
 	}
 }
