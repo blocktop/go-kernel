@@ -33,19 +33,22 @@ type RPC struct {
 }
 
 func (h *RPC) GetMetrics(r *http.Request, args *rpcclient.GetMetricsArgs, reply *rpcclient.GetMetricsReply) error {
+	if !Initialized() {
+		return errors.New("kernel not initialized")
+	}
 	switch args.Format {
 	case "text":
-		if !Initialized() {
-			reply.Metrics = "kernel not initialized"
-		} else {
-			reply.Metrics = metrics.String()
-		}
+		reply.Metrics = metrics.String()
 
 	case "json":
-		reply.Metrics = `{"error": "not implemented"}`
+		j, err := metrics.JSON()
+		if err != nil {
+			return err
+		}
+		reply.Metrics = j
 
 	default:
-		return errors.New("Format must be either text or json")
+		return errors.New("format must be either text or json")
 	}
 
 	return nil

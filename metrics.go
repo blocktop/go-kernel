@@ -17,6 +17,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,18 +29,18 @@ import (
 )
 
 type KernelMetrics struct {
-	cycleTime               *movavg.SMASet
-	maintTime               *movavg.SMASet
-	maintTimePercent        *movavg.SMASet
-	genBlockTime            *movavg.SMASet
-	addBlockTime            *movavg.SMASet
-	confBlockTime           *movavg.SMASet
-	evalTime                *movavg.SMASet
-	computedProcTime        *movavg.SMASet
-	computedProcTimePercent *movavg.SMASet
-	actualProcTime          *movavg.SMASet
-	actualProcTimePercent   *movavg.SMASet
-	blockQCount             *movavg.SMASet
+	cycleTime               movavg.MultiMA
+	maintTime               movavg.MultiMA
+	maintTimePercent        movavg.MultiMA
+	genBlockTime            movavg.MultiMA
+	addBlockTime            movavg.MultiMA
+	confBlockTime           movavg.MultiMA
+	evalTime                movavg.MultiMA
+	computedProcTime        movavg.MultiMA
+	computedProcTimePercent movavg.MultiMA
+	actualProcTime          movavg.MultiMA
+	actualProcTimePercent   movavg.MultiMA
+	blockQCount             movavg.MultiMA
 	recvQCounts             *sync.Map
 	lastMaintTime           int64
 	lastProcTime            int64
@@ -50,19 +51,19 @@ var SMAWindows = []int{10, 100, 1000, 10000, 100000, 1000000}
 
 func initMetrics() {
 	m := &KernelMetrics{}
-	m.cycleTime = movavg.NewSMASet(SMAWindows)
-	m.maintTime = movavg.NewSMASet(SMAWindows)
-	m.maintTimePercent = movavg.NewSMASet(SMAWindows)
-	m.genBlockTime = movavg.NewSMASet(SMAWindows)
-	m.addBlockTime = movavg.NewSMASet(SMAWindows)
-	m.confBlockTime = movavg.NewSMASet(SMAWindows)
-	m.evalTime = movavg.NewSMASet(SMAWindows)
-	m.computedProcTime = movavg.NewSMASet(SMAWindows)
-	m.computedProcTimePercent = movavg.NewSMASet(SMAWindows)
-	m.actualProcTimePercent = movavg.NewSMASet(SMAWindows)
-	m.actualProcTime = movavg.NewSMASet(SMAWindows)
-	m.blockQCount = movavg.NewSMASet(SMAWindows)
-	m.recvQCounts = &sync.Map{} // [protocol]*movavg.SMASet
+	m.cycleTime = movavg.NewMultiSMA(SMAWindows)
+	m.maintTime = movavg.NewMultiSMA(SMAWindows)
+	m.maintTimePercent = movavg.NewMultiSMA(SMAWindows)
+	m.genBlockTime = movavg.NewMultiSMA(SMAWindows)
+	m.addBlockTime = movavg.NewMultiSMA(SMAWindows)
+	m.confBlockTime = movavg.NewMultiSMA(SMAWindows)
+	m.evalTime = movavg.NewMultiSMA(SMAWindows)
+	m.computedProcTime = movavg.NewMultiSMA(SMAWindows)
+	m.computedProcTimePercent = movavg.NewMultiSMA(SMAWindows)
+	m.actualProcTimePercent = movavg.NewMultiSMA(SMAWindows)
+	m.actualProcTime = movavg.NewMultiSMA(SMAWindows)
+	m.blockQCount = movavg.NewMultiSMA(SMAWindows) 
+	m.recvQCounts = &sync.Map{} // [protocol]movavg.MultiMA
 
 	metrics = m
 }
@@ -87,6 +88,9 @@ func (m *KernelMetrics) setMaintTime(duration int64) {
 }
 func (m *KernelMetrics) MaintTime() []float64 {
 	return m.maintTime.Avg()
+}
+func (m *KernelMetrics) MaintTimePercent() []float64 {
+	return m.maintTimePercent.Avg()
 }
 
 func (m *KernelMetrics) setGenBlockTime(duration int64) {
@@ -158,15 +162,15 @@ func (m *KernelMetrics) RecvQCount(name string) []float64 {
 func (m *KernelMetrics) RecvQCounts() map[string][]float64 {
 	res := make(map[string][]float64)
 	m.recvQCounts.Range(func(n, s interface{}) bool {
-		res[n.(string)] = s.(*movavg.SMASet).Avg()
+		res[n.(string)] = s.(movavg.MultiMA).Avg()
 		return true
 	})
 	return res
 }
 
-func (m *KernelMetrics) getRecvQ(name string) *movavg.SMASet {
-	set, _ := m.recvQCounts.LoadOrStore(name, movavg.NewSMASet(SMAWindows))
-	return set.(*movavg.SMASet)
+func (m *KernelMetrics) getRecvQ(name string) movavg.MultiMA {
+	set, _ := m.recvQCounts.LoadOrStore(name, movavg.NewMultiSMA(SMAWindows))
+	return set.(movavg.MultiMA)
 }
 
 func (m *KernelMetrics) computeProcTime() time.Duration {
@@ -206,9 +210,59 @@ func (m *KernelMetrics) String() string {
 	
 	b.WriteString("--- Maintenance Timeslice ---\n")
 	b.WriteString(fmt.Sprintf("Maintenance timesclice time (ns): %v\n", m.MaintTime()))
-	b.WriteString(fmt.Sprintf("Maintenance timesclice %% of block interval: %v\n", m.MaintTime()))
+	b.WriteString(fmt.Sprintf("Maintenance timesclice %% of block interval: %v\n", m.MaintTimePercent()))
 	b.WriteString(fmt.Sprintf("Block confirmation time (ns): %v\n", m.ConfBlockTime()))
 	b.WriteString(fmt.Sprintf("Head block evaluation time (ns): %v\n", m.ConfBlockTime()))
 
 	return b.String()
+}
+
+
+type KernelMetricsJSON struct {
+	KernelTime string
+	Uptime time.Duration
+	MovingAverageWindows []int
+	BlockQueueCounts []float64
+	ReceiveQueueCounts map[string][]float64
+	CycleNumber uint64 `json:",string"`
+	ConfiguredCycleTime time.Duration
+	ActualCycleTime []float64
+	ProcessTimeslice []float64
+	ProcessTimeslicePercent []float64
+	ScheduledProcessTimeslice []float64
+	ScheduledProcessTimeslicePercent []float64
+	BlockGenerationTime []float64
+	BlockAddPerformance []float64
+	MaintenanceTimeslice []float64
+	MaintenanceTimeslicePercent []float64
+	BlockConfirmationTime []float64
+	HeadBlockEvaluationTime []float64
+}
+
+func (m *KernelMetrics) JSON() (string, error) {
+	mj := &KernelMetricsJSON{
+		KernelTime: ktime.String(),
+		Uptime: ktime.UpTime(),
+		MovingAverageWindows: SMAWindows,
+		BlockQueueCounts: m.BlockQCount(),
+		ReceiveQueueCounts: m.RecvQCounts(),
+		CycleNumber: ktime.CycleNumber(),
+		ConfiguredCycleTime: ktime.BlockInterval(),
+		ActualCycleTime: m.CycleTime(),
+		ProcessTimeslice: m.ActualProcTime(),
+		ProcessTimeslicePercent: m.ActualProcTimePercent(),
+		ScheduledProcessTimeslice: m.ComputedProcTime(),
+		ScheduledProcessTimeslicePercent: m.ComputedProcTimePercent(),
+		BlockGenerationTime: m.GenBlockTime(),
+		BlockAddPerformance: m.AddBlockTime(),
+		MaintenanceTimeslice: m.MaintTime(),
+		MaintenanceTimeslicePercent: m.MaintTimePercent(),
+		BlockConfirmationTime: m.ConfBlockTime(),
+		HeadBlockEvaluationTime: m.EvalTime()}
+
+	byts, err := json.Marshal(mj)
+	if err != nil {
+		return "", err
+	}
+	return string(byts), nil
 }
