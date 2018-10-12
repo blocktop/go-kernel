@@ -26,7 +26,6 @@ import (
 
 type Kernel struct {
 	name    string
-	genNum  uint64
 	net     spec.NetworkNode
 	started bool
 	stop    func()
@@ -89,6 +88,11 @@ func Network() *KernelNet {
 func Proc() *KernelProc {
 	panicIfUninitialized()
 	return proc
+}
+
+func Block() *KernelBlock {
+	panicIfUninitialized()
+	return blk
 }
 
 func Started() bool {

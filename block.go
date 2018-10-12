@@ -35,6 +35,7 @@ type KernelBlock struct {
 	eval    CompetitionEvaluator
 	conf    BlockConfirmer
 	add     BlockAdder
+	genNum  uint64
 }
 
 var blk *KernelBlock
@@ -56,6 +57,10 @@ func initBlock(c *KernelConfig) {
 	net.RegisterMessageChannel(b.msgChan)
 
 	blk = b
+}
+
+func (b *KernelBlock) BlockNumber() uint64 {
+	return b.genNum
 }
 
 func (b *KernelBlock) start() {
@@ -102,14 +107,17 @@ func (b *KernelBlock) generate() {
 	nocomp := true
 	if b.comp != nil {
 		// Get the branch we are to generate on.
-		branch, rootID, switchHeads := b.comp.Branch(kernel.genNum)
+		branch, rootID, switchHeads := b.comp.Branch(b.genNum)
 		// TODO: if switchHeads find latest block generated on the new head, if any.
 		// Generate on that.
 		_ = switchHeads
 		var newBlock spec.Block
 		if branch != nil {
-			kernel.genNum = branch[0].BlockNumber() + 1
+			b.genNum = branch[0].BlockNumber() + 1
+			startTime := time.Now().UnixNano()
 			newBlock = b.gen(branch, rootID)
+			endTime := time.Now().UnixNano()
+			metrics.setGenBlockTime(endTime - startTime)
 			if !b.outputNewLocalBlock(newBlock) {
 				return
 			}
@@ -117,7 +125,7 @@ func (b *KernelBlock) generate() {
 		}
 	}
 	if nocomp {
-		glog.V(3).Infof("%s: no competition at block %d", ktime.String(), kernel.genNum)
+		glog.V(3).Infof("%s: no competition at block %d", ktime.String(), b.genNum)
 	}
 }
 
@@ -168,11 +176,14 @@ func (b *KernelBlock) blockBatchWorker(items []*blockQueueItem, local bool) {
 		blocks[i] = item.block
 		index[item.block.Hash()] = item.netMsg
 	}
+	startTime := time.Now().UnixNano()
 	addedBlock, err := b.add(blocks, local)
 	if err != nil {
 		glog.Errorln("failed to add blocks:", err)
 		return
 	}
+	endTime := time.Now().UnixNano()
+	metrics.setAddBlockTime(endTime - startTime)
 
 	if addedBlock != nil {
 		netMsg := index[addedBlock.Hash()]

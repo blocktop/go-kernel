@@ -70,7 +70,6 @@ func (t *KernelTime) Nanos() int64 {
 
 func (t *KernelTime) String() string {
 	scycle := humanize.Comma(int64(t.CycleNumber()))
-	scycle = strings.Replace(scycle, ",", ":", -1)
 	return fmt.Sprintf("%s.%s", scycle, rightPadZeroes(t.Nanos()/1000, 6))
 }
 
