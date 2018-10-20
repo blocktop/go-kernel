@@ -19,27 +19,17 @@ package kernel
 import spec "github.com/blocktop/go-spec"
 
 type KernelConfig struct {
-	BlockchainName             string
+	Blockchain spec.Blockchain
+	Consensus  spec.Consensus
+
 	// BlockRate is expressed in units of blocks per second.
-	BlockFrequency             float64
-	BlockConfirmer             BlockConfirmer
-	CompetitionEvaluator       CompetitionEvaluator
-	BlockGenerator             BlockGenerator
-	GenesisGenerator           GenesisGenerator
-	BlockPrototype             spec.Marshalled
-	NetworkNode                spec.NetworkNode
-	BlockAdder                 BlockAdder
+	BlockFrequency float64
+	BlockPrototype spec.Marshalled
+	NetworkNode    spec.NetworkNode
 }
 
-type BlockConfirmer func()
-type CompetitionEvaluator func() spec.Competition
-type BlockGenerator func(branch []spec.Block, rootID int) spec.Block
-type GenesisGenerator func() spec.Block
-type BlockAdder func(blocks []spec.Block, local bool) (spec.Block, error)
-
 func (c *KernelConfig) valid() bool {
-	return c.BlockConfirmer != nil && c.CompetitionEvaluator != nil &&
-		c.BlockGenerator != nil && c.NetworkNode != nil && c.BlockFrequency > 0 &&
-		c.BlockchainName != "" && c.BlockPrototype != nil && c.BlockAdder != nil &&
-		c.GenesisGenerator != nil
+	return c.Blockchain != nil && c.Consensus != nil &&
+		c.NetworkNode != nil && c.BlockFrequency > 0 &&
+		c.BlockPrototype != nil
 }

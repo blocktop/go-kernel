@@ -41,7 +41,7 @@ func Init(c *KernelConfig) {
 	}
 
 	k := &Kernel{}
-	k.name = c.BlockchainName
+	k.name = c.Blockchain.Name()
 
 	kernel = k
 
@@ -179,13 +179,14 @@ func (k *Kernel) proc() {
 	glog.V(3).Infof("Uptime: %s", ktime.UpTime().String())
 	glog.V(3).Infof("Kernel time: %s", ktime.String())
 
-	blk.start()
-
 	// Anything broadcast during this proc cycle will not be sent
 	// Until the cycle is over. This prevents a message created
 	// during the cycle from being received during the same cycle
 	// e.g. runaway process.
 	net.beginProc()
+
+	// Resume processing of blocks received and queued.
+	blk.start()
 
 	procTime := metrics.computeProcTime()
 	glog.V(3).Infof("%s: computed process time %dms", ktime.String(), procTime/time.Millisecond)
@@ -194,7 +195,8 @@ func (k *Kernel) proc() {
 
 	blk.generate()
 
-	// Wait for the block to generate and the timer to expire, which ever comes last.
+	// Wait for the block to generate and the timer to expire, which ever comes _last_
+	// (blk.generate is not a goroutine).
 	<-timer.C
 
 	net.endProc()
