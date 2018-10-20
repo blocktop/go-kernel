@@ -69,25 +69,23 @@ func (b *KernelBlock) stop() {
 }
 
 func (b *KernelBlock) maint() {
-	evalStartTime := time.Now().UnixNano()
-	glog.V(3).Infof("%s: running head block evaluator", ktime.String())
-	comp := b.consensus.Evaluate()
-	evalEndTime := time.Now().UnixNano()
-	metrics.setEvalTime(evalEndTime - evalStartTime)
-
-	b.setComp(comp)
-
+	// Confirm blocks at the confirming root. This also cleans up
+	// old blocks and prunes trees of disqualified blocks.
 	confStartTime := time.Now().UnixNano()
 	glog.V(3).Infof("%s: running block confirmer", ktime.String())
 	b.consensus.ConfirmBlocks()
 	confEndTime := time.Now().UnixNano()
 	metrics.setConfBlockTime(confEndTime - confStartTime)
 
-	metrics.setBlockQCount(b.blockQs.count())
-}
+	// Evaluate the consensus roots so that we can choose one for
+	// block generation during the proc timeslice.
+	evalStartTime := time.Now().UnixNano()
+	glog.V(3).Infof("%s: running head block evaluator", ktime.String())
+	b.comp = b.consensus.Evaluate()
+	evalEndTime := time.Now().UnixNano()
+	metrics.setEvalTime(evalEndTime - evalStartTime)
 
-func (b *KernelBlock) setComp(comp spec.Competition) {
-	b.comp = comp
+	metrics.setBlockQCount(b.blockQs.count())
 }
 
 func (b *KernelBlock) generate() {
@@ -107,7 +105,6 @@ func (b *KernelBlock) generate() {
 	}
 
 	blocks := compBranch.Blocks()
-	b.genNum = blocks[0].BlockNumber() + 1
 
 	startTime := time.Now().UnixNano()
 	newBlock := b.blockchain.GenerateBlock(blocks, compBranch.RootID())
@@ -129,6 +126,10 @@ func (b *KernelBlock) evaluateBranches() spec.CompetingBranch {
 	if curBranch != nil {
 		// TODO: may want to evaluate other branches as well
 		b.consensus.SetConfirmingRoot(b.rootID)
+
+		curBlockNumber := curBranch.Blocks()[0].BlockNumber()
+		b.genNum = curBlockNumber + 1
+
 		return curBranch
 	}
 
@@ -142,9 +143,14 @@ func (b *KernelBlock) evaluateBranches() spec.CompetingBranch {
 		}
 	}
 
-	b.rootID = bestRootID
-	b.consensus.SetConfirmingRoot(bestRootID)
-	return branches[bestRootID]
+	bestBranch := branches[bestRootID]
+	if bestBranch != nil {
+		b.genNum = bestBranch.Blocks()[0].BlockNumber() + 1
+		b.rootID = bestRootID
+		b.consensus.SetConfirmingRoot(bestRootID)
+	}
+
+	return bestBranch
 }
 
 func (b *KernelBlock) outputNewLocalBlock(newBlock spec.Block) bool {

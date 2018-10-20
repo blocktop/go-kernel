@@ -112,6 +112,8 @@ func Start(parentCtx context.Context) {
 
 	net.start()
 
+	ktime.up()
+
 	go kernel.runBlockCycle(ctx)
 }
 
@@ -161,6 +163,7 @@ func (k *Kernel) maint() {
 	maintStartTime := time.Now().UnixNano()
 
 	glog.V(3).Infoln("------------- maint cycle -------------")
+	glog.V(3).Infof("Uptime: %s", ktime.UpTime().String())
 	glog.V(3).Infof("Kernel time: %s", ktime.String())
 
 	blk.stop()

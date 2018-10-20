@@ -31,7 +31,7 @@ type KernelTime struct {
 	intervalLen    string
 	cycleNumber    uint64
 	startTime      int64
-	upTime        int64
+	cycleStartTime int64
 }
 
 var ktime *KernelTime
@@ -57,7 +57,7 @@ func (t *KernelTime) BlockInterval() time.Duration {
 }
 
 func (t *KernelTime) UpTime() time.Duration {
-	return time.Duration(t.upTime)
+	return time.Duration(t.Nanos())
 }
 
 func (t *KernelTime) CycleNumber() uint64 {
@@ -70,22 +70,29 @@ func (t *KernelTime) Nanos() int64 {
 
 func (t *KernelTime) String() string {
 	scycle := humanize.Comma(int64(t.CycleNumber()))
-	return fmt.Sprintf("%s.%s", scycle, rightPadZeroes(t.Nanos()/1000, 6))
+	cycleTime := (time.Now().UnixNano() - t.cycleStartTime) / 1000
+	return fmt.Sprintf("%s.%s", scycle, leftPadZeroes(cycleTime, 6))
+}
+
+func (t *KernelTime) up() {
+	t.startTime = time.Now().UnixNano()
 }
 
 func (t *KernelTime) startCycle() {
 	now := time.Now().UnixNano()
-	cycleTime := now - t.startTime
+	cycleTime := now - t.cycleStartTime
 	metrics.setCycleTime(cycleTime)
-	if t.startTime > 0 {
-		t.upTime += cycleTime
-	}
 	t.cycleNumber++
-	t.startTime = now
+	t.cycleStartTime = now
 }
 
-func rightPadZeroes(val int64, overallLen int) string {
-	s := fmt.Sprintf("%d%s", val, strings.Repeat("0", overallLen))
-	return s[:overallLen]
-}
+func leftPadZeroes(val int64, overallLen int) string {
+	v := fmt.Sprintf("%d", val)
 
+	if len(v) > overallLen {
+		v = v[0:overallLen]
+	}
+
+	s := fmt.Sprintf("%s%s", strings.Repeat("0", overallLen-len(v)), v)
+	return s
+}
