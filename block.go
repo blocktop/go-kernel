@@ -200,14 +200,20 @@ func (b *KernelBlock) blockBatchWorker(items []*blockQueueItem, local bool) {
 		blocks[i] = item.block
 		index[item.block.Hash()] = item.netMsg
 	}
+
 	startTime := time.Now().UnixNano()
 	res := b.blockchain.AddBlocks(blocks, local)
+	endTime := time.Now().UnixNano()
+	metrics.setAddBlockTime(endTime - startTime)
+
+	if res == nil {
+		return // no blocks added
+	}
+
 	if res.Error != nil {
 		glog.Errorln("failed to add blocks:", res.Error)
 		return
 	}
-	endTime := time.Now().UnixNano()
-	metrics.setAddBlockTime(endTime - startTime)
 
 	if res.AddedBlock != nil {
 		netMsg := index[res.AddedBlock.Hash()]
